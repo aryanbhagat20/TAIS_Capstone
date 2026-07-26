@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+venv/
+env/
+*.egg-info/
+
+# Data (generated telemetry logs shouldn't clutter git history)
+data/*.csv
+data/*.json
+!data/.gitkeep
+
+# OS/editor
+.DS_Store
+.vscode/
+*.swp
+
+# Streamlit
+.streamlit/
