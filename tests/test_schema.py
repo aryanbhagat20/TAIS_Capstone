@@ -1,11 +1,10 @@
 """
 test_schema.py — sanity tests for the locked AIS-140 schema.
 Run with: pytest tests/test_schema.py -v
-"""
-import sys
-import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
+Path setup (adding src/ to sys.path) is handled centrally by
+conftest.py at the repo root — no per-file hack needed here.
+"""
 from datetime import datetime, timezone
 from schema import (
     TelemetryRecord, TrustAssessment,

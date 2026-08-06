@@ -9,13 +9,13 @@ computing a Trust Score with an explained confidence level to flag kinematically
 data — ahead of India's shift to GNSS-based satellite tolling. Simulation-first: no physical
 hardware or field data collection required to complete this capstone.
 
-See the full project proposal for problem statement, architecture, and scope
-*(proposal PDF to be added to `docs/`).*
+See the full project proposal for problem statement, architecture, and scope:
+`docs/TAIS_Capstone_Proposal.pdf`.
 
 ## Status
 
-🟡 **Week 1 of 17** — repo scaffolding, schema locked, literature survey drafted.
-*(Project timeline PDF to be added.)*
+🟡 **Week 2 of 17** — Problem Statement + Methodology docs written, simulator skeleton locked.
+See `TAIS_Project_Timeline.pdf` for the full week-by-week plan.
 
 ## Repo Structure
 
@@ -25,16 +25,20 @@ TAIS/
 ├── requirements.txt
 ├── .gitignore
 ├── docs/
-│   ├── literature_survey.md       ← Week 1
-│   └── verified_ais140_fields.md  ← Week 1
+│   ├── literature_survey.md        ← Week 1
+│   ├── verified_ais140_fields.md    ← Week 1
+│   ├── problem_statement.md        ← Week 2
+│   └── methodology.md              ← Week 2
 ├── src/
-│   ├── schema.py                  ← Week 1 (LOCKED — do not redefine fields elsewhere)
-│   ├── simulator/                 ← Week 4
-│   ├── engine/                    ← Weeks 6-7
-│   └── dashboard/                 ← Week 8
+│   ├── schema.py                   ← Week 1 (LOCKED — do not redefine fields elsewhere)
+│   ├── simulator/
+│   │   └── telemetry_simulator.py  ← Week 2 skeleton, Week 4 full implementation
+│   ├── engine/                     ← Weeks 6-7
+│   └── dashboard/                  ← Week 8
 ├── tests/
-│   └── test_schema.py             ← Week 1
-└── data/                          ← generated telemetry logs land here (gitignored)
+│   ├── test_schema.py              ← Week 1
+│   └── test_simulator_skeleton.py  ← Week 2
+└── data/                           ← generated telemetry logs land here (gitignored)
 ```
 
 ## Setup
