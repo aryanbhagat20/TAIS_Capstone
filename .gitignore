@@ -7,10 +7,18 @@ venv/
 env/
 *.egg-info/
 
-# Data (generated telemetry logs shouldn't clutter git history)
+# Data (raw downloads and generated outputs shouldn't clutter git history)
+data/raw/
+data/processed/
 data/*.csv
 data/*.json
 !data/.gitkeep
+!data/raw/
+!data/raw/.gitkeep
+!data/raw/own_collection/.gitkeep
+!data/raw/tdrive/.gitkeep
+!data/processed/.gitkeep
+
 
 # OS/editor
 .DS_Store
