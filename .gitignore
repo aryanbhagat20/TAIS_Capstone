@@ -16,6 +16,19 @@ data/*.json
 .DS_Store
 .vscode/
 *.swp
+Thumbs.db
 
 # Streamlit
 .streamlit/
+
+# Word temp/lock files
+~$*.docx
+~$*.xlsx
+~$*.pptx
+
+# Review build/helper scripts (generated, not source)
+reviews/**/*.py
+reviews/**/*.txt
+
+# Jupyter
+.ipynb_checkpoints/
