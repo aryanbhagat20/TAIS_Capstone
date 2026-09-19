@@ -695,9 +695,9 @@ class TrustScoringEngine:
 
     def _determine_action(self, trust_score: float) -> Action:
         """Map trust score to tiered response action."""
-        if trust_score < self.config.threshold_escalate:
+        if trust_score <= self.config.threshold_escalate:
             return Action.ESCALATE
-        elif trust_score < self.config.threshold_flagged:
+        elif trust_score <= self.config.threshold_flagged:
             return Action.FLAGGED
         return Action.NORMAL
 
