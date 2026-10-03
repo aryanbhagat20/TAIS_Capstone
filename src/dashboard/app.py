@@ -1,16 +1,9 @@
 """
-TAIS Dashboard — Streamlit Visualization Interface
-====================================================
+TAIS Dashboard v2.0 -- Real Data Visualization
+=================================================
 
-Interactive dashboard for the Telemetry Assessment and Integrity System.
-
-Features:
-    - Real-time pipeline execution with scenario/anomaly selection
-    - Trust score trend line chart with color-coded action zones
-    - Sub-score radar/breakdown per record
-    - Alerts table with severity levels
-    - Per-record explanation panel
-    - Sequence summary statistics
+Human-friendly dashboard for the Telemetry Assessment & Integrity System.
+Uses self-collected GPS data from VIT Vellore trips.
 
 Usage:
     streamlit run src/dashboard/app.py
@@ -24,85 +17,171 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
+# pyrefly: ignore [missing-import]
 import streamlit as st
 import pandas as pd
+# pyrefly: ignore [import-unresolved, missing-import]
 import plotly.graph_objects as go
+# pyrefly: ignore [import-unresolved, missing-import]
 import plotly.express as px
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 
 from src.schema import TelemetryRecord, TrustAssessment, Action, Confidence
 from src.injector.anomaly_injector import AnomalyInjector, AnomalyType
 from src.engine.trust_scoring_engine import TrustScoringEngine, ScoringConfig
+from src.data_loader.own_data_loader import OwnDataLoader
 
 
 # -- Page config --
 st.set_page_config(
-    page_title="TAIS Dashboard",
-    page_icon="🛡",
+    page_title="TAIS - Trust Assessment Dashboard",
+    page_icon="🛡️",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# -- Custom CSS --
+# -- Custom CSS for a clean, readable design --
 st.markdown("""
 <style>
-    .stApp { background-color: #0e1117; }
-    .metric-card {
-        background: linear-gradient(135deg, #1a1f2e 0%, #2d3748 100%);
+    /* Overall font */
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+    .stApp {
+        font-family: 'Inter', sans-serif;
+    }
+
+    /* Metric cards */
+    [data-testid="stMetric"] {
+        background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
+        padding: 16px 20px;
         border-radius: 12px;
-        padding: 20px;
-        border: 1px solid #4a5568;
-        text-align: center;
+        border: 1px solid #475569;
     }
-    .metric-value {
-        font-size: 2.5em;
+    [data-testid="stMetricValue"] {
+        font-size: 2rem;
         font-weight: 700;
-        color: #e2e8f0;
     }
-    .metric-label {
-        font-size: 0.9em;
-        color: #a0aec0;
+    [data-testid="stMetricLabel"] {
+        font-size: 0.85rem;
         text-transform: uppercase;
-        letter-spacing: 1px;
+        letter-spacing: 0.5px;
+        color: #94a3b8;
     }
-    .status-normal { color: #48bb78; }
-    .status-flagged { color: #ed8936; }
-    .status-escalate { color: #fc8181; }
-    .reason-box {
-        background: #1a202c;
-        border-left: 4px solid #ed8936;
-        padding: 10px 15px;
-        margin: 5px 0;
-        border-radius: 0 8px 8px 0;
-        font-family: monospace;
-        font-size: 0.85em;
+
+    /* Section headers */
+    .section-header {
+        font-size: 1.4rem;
+        font-weight: 600;
+        color: #e2e8f0;
+        margin-top: 1.5rem;
+        margin-bottom: 0.5rem;
+        padding-bottom: 0.5rem;
+        border-bottom: 2px solid #3b82f6;
     }
+
+    /* Info cards */
+    .info-card {
+        background: #1e293b;
+        border-radius: 10px;
+        padding: 16px;
+        border-left: 4px solid #3b82f6;
+        margin: 8px 0;
+    }
+    .info-card-warn {
+        border-left-color: #f59e0b;
+    }
+    .info-card-danger {
+        border-left-color: #ef4444;
+    }
+    .info-card-success {
+        border-left-color: #22c55e;
+    }
+
+    /* Score badge */
+    .score-badge {
+        display: inline-block;
+        padding: 4px 12px;
+        border-radius: 20px;
+        font-weight: 600;
+        font-size: 0.9rem;
+    }
+    .score-high { background: #166534; color: #bbf7d0; }
+    .score-mid { background: #854d0e; color: #fef08a; }
+    .score-low { background: #991b1b; color: #fecaca; }
+
+    /* Rule explanation */
+    .rule-card {
+        background: #0f172a;
+        border: 1px solid #334155;
+        border-radius: 8px;
+        padding: 12px 16px;
+        margin: 6px 0;
+    }
+    .rule-id {
+        font-weight: 700;
+        color: #60a5fa;
+        font-size: 0.9rem;
+    }
+    .rule-desc {
+        color: #cbd5e1;
+        font-size: 0.85rem;
+        margin-top: 4px;
+    }
+
+    /* Hide default streamlit branding */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
 </style>
 """, unsafe_allow_html=True)
 
 
-# ================================================================
-# Data generation (cached)
-# ================================================================
+# ==================================================================
+# Data loading functions
+# ==================================================================
+
+TRIP_DIR = Path(ROOT) / "data" / "raw" / "own_collection"
+
+TRIP_INFO = {
+    "trip_01_campus": {
+        "label": "Campus Walk (VIT Vellore)",
+        "icon": "🏫",
+        "description": "Walking around VIT campus - low speed, frequent turns",
+    },
+    "trip_02_city": {
+        "label": "City Drive (Vellore)",
+        "icon": "🏙️",
+        "description": "Driving through Vellore city - mixed speeds, traffic signals",
+    },
+    "trip_03_highway": {
+        "label": "Highway Drive",
+        "icon": "🛣️",
+        "description": "Highway driving - sustained high speed, straight roads",
+    },
+    "trip_05_stationary": {
+        "label": "Stationary (Parked)",
+        "icon": "🅿️",
+        "description": "Phone kept stationary - baseline for GPS drift detection",
+    },
+}
+
 
 @st.cache_data
-def generate_data(scenario, duration, seed):
-    """Generate synthetic telemetry route."""
-    from run_pipeline import generate_synthetic_route
-    return generate_synthetic_route(
-        scenario=scenario,
-        duration_minutes=duration,
-        seed=seed,
-    )
+def load_trip_data(trip_name):
+    """Load a trip CSV and return records + assessments."""
+    loader = OwnDataLoader()
+    device_id = f"ARYAN_{trip_name.split('_')[2].upper()}"
+    records = loader.load_trip(str(TRIP_DIR / f"{trip_name}.csv"), device_id=device_id)
+    return records
 
 
 @st.cache_data
-def run_engine(records_dicts, anomaly_type_val, seed):
-    """Run injector + engine on telemetry data."""
-    # Reconstruct records from dicts
+def score_records(_records_hash, records_list, inject_anomaly, seed):
+    """Score records through the engine, optionally injecting anomalies."""
+    # Reconstruct records from serializable format
     from src.schema import PositionValidity, DeviceStatus
     records = []
-    for d in records_dicts:
+    for d in records_list:
         d = dict(d)
         d['timestamp'] = datetime.fromisoformat(d['timestamp'])
         d['position_validity'] = PositionValidity(d['position_validity'])
@@ -110,355 +189,533 @@ def run_engine(records_dicts, anomaly_type_val, seed):
         records.append(TelemetryRecord(**d))
 
     engine = TrustScoringEngine()
+    label_indices = set()
 
-    if anomaly_type_val != "none":
+    if inject_anomaly and inject_anomaly != "none":
         injector = AnomalyInjector(seed=seed)
-        atype = AnomalyType(anomaly_type_val)
-        modified, labels = injector.inject(records, atype)
-        assessments = engine.assess_sequence(modified)
+        atype = AnomalyType(inject_anomaly)
+        records, labels = injector.inject(records, atype)
         label_indices = {l.record_index for l in labels}
-        return assessments, label_indices, modified
-    else:
-        assessments = engine.assess_sequence(records)
-        return assessments, set(), records
+
+    assessments = engine.assess_sequence(records)
+    summary = engine.sequence_summary(assessments)
+    return assessments, summary, label_indices, records
 
 
-def assessments_to_df(assessments):
-    """Convert assessments to a pandas DataFrame."""
+def make_df(assessments, records, label_indices):
+    """Build a combined DataFrame for visualization."""
     rows = []
-    for i, a in enumerate(assessments):
+    for i, (a, r) in enumerate(zip(assessments, records)):
         rows.append({
             "Index": i,
-            "Timestamp": a.timestamp,
+            "Time": a.timestamp,
+            "Latitude": r.latitude,
+            "Longitude": r.longitude,
+            "Speed (km/h)": round(r.speed, 1),
+            "Heading": round(r.heading, 1),
+            "Satellites": r.satellite_count,
+            "HDOP": r.hdop,
             "Trust Score": a.trust_score,
             "Action": a.action.value,
             "Confidence": a.confidence.value,
-            "Motion": a.sub_scores.get("motion", 100),
-            "Trajectory": a.sub_scores.get("trajectory", 100),
-            "Signal": a.sub_scores.get("signal", 100),
-            "Temporal": a.sub_scores.get("temporal", 100),
-            "Reasons": "; ".join(a.reasons) if a.reasons else "None",
-            "Flag Count": len(a.reasons),
+            "Motion Score": a.sub_scores.get("motion", 100),
+            "Trajectory Score": a.sub_scores.get("trajectory", 100),
+            "Signal Score": a.sub_scores.get("signal", 100),
+            "Temporal Score": a.sub_scores.get("temporal", 100),
+            "Issues": "; ".join(a.reasons) if a.reasons else "",
+            "Issue Count": len(a.reasons),
+            "Is Anomaly": i in label_indices,
+            "Source": "GPS" if r.satellite_count > 0 else "Network",
         })
     return pd.DataFrame(rows)
 
 
-# ================================================================
-# Sidebar
-# ================================================================
+# Human-readable rule explanations
+RULE_EXPLANATIONS = {
+    "R1": ("Speed Check", "Is the vehicle going faster than physically possible (>200 km/h)?"),
+    "R2": ("Acceleration Check", "Did the vehicle speed up or brake impossibly fast?"),
+    "R3": ("Position vs Speed", "Does the actual distance moved match the reported speed?"),
+    "R4": ("Direction Check", "Does the heading match the actual direction of travel?"),
+    "R5": ("GPS Quality (HDOP)", "Is the GPS fix quality good enough to trust the position?"),
+    "R6": ("Satellite Count", "Are there enough satellites for a reliable GPS fix (need 4+)?"),
+    "R7": ("Time Check", "Are timestamps consistent (no gaps, jumps, or going backwards)?"),
+}
 
-st.sidebar.markdown("# TAIS Dashboard")
-st.sidebar.markdown("**Telemetry Assessment & Integrity System**")
+
+# ==================================================================
+# Sidebar — Trip Selection
+# ==================================================================
+
+st.sidebar.markdown("# 🛡️ TAIS Dashboard")
+st.sidebar.markdown("*Telemetry Assessment & Integrity System*")
 st.sidebar.markdown("---")
 
-scenario = st.sidebar.selectbox(
-    "Driving Scenario",
-    ["highway", "city", "degraded"],
-    index=0,
-    help="Highway: 60-100km/h, City: 0-40km/h, Degraded: high HDOP"
+# Find available trips
+available_trips = []
+for name in TRIP_INFO:
+    if (TRIP_DIR / f"{name}.csv").exists():
+        available_trips.append(name)
+
+if not available_trips:
+    st.error("No trip data found! Place CSV files in data/raw/own_collection/")
+    st.stop()
+
+# Trip selector
+st.sidebar.markdown("### Select Trip")
+selected_trip = st.sidebar.selectbox(
+    "Choose a trip to analyze",
+    available_trips,
+    format_func=lambda x: f"{TRIP_INFO[x]['icon']} {TRIP_INFO[x]['label']}",
+    label_visibility="collapsed",
 )
 
-duration = st.sidebar.slider(
-    "Duration (minutes)", 5, 30, 15, step=5,
+trip_info = TRIP_INFO[selected_trip]
+st.sidebar.info(f"**{trip_info['label']}**\n\n{trip_info['description']}")
+
+# Anomaly injection toggle
+st.sidebar.markdown("---")
+st.sidebar.markdown("### Anomaly Simulation")
+st.sidebar.caption(
+    "Inject a fake anomaly into the real data to test if the engine detects it."
 )
 
-anomaly_options = ["none"] + [a.value for a in AnomalyType]
-anomaly_type = st.sidebar.selectbox(
-    "Inject Anomaly",
-    anomaly_options,
-    index=0,
-    help="Select 'none' for clean data, or inject a specific anomaly type"
+inject_anomaly = st.sidebar.selectbox(
+    "Inject anomaly type",
+    ["none", "position_jump", "speed_injection", "gps_freeze",
+     "drift", "heading_change", "replay"],
+    format_func=lambda x: {
+        "none": "No injection (clean data)",
+        "position_jump": "Position Jump (teleport)",
+        "speed_injection": "Impossible Speed (>300 km/h)",
+        "gps_freeze": "GPS Freeze (stuck position)",
+        "drift": "Slow Drift (gradual position shift)",
+        "heading_change": "Heading Flip (sudden direction change)",
+        "replay": "Replay Attack (repeated old data)",
+    }.get(x, x),
 )
 
-seed = st.sidebar.number_input("Random Seed", value=42, step=1)
+seed = st.sidebar.number_input("Random seed", value=42, step=1)
 
 st.sidebar.markdown("---")
-run_button = st.sidebar.button("Run Pipeline", type="primary", use_container_width=True)
-
-st.sidebar.markdown("---")
-st.sidebar.markdown("""
-**TAIS v1.0**
-25MCA0022 - Aryan Bhagat
-VIT Vellore, Fall 2026-27
-Guide: Dr. Sathiyamoorthy E
-""")
-
-
-# ================================================================
-# Main content
-# ================================================================
-
-# Generate and cache data
-clean_records = generate_data(scenario, duration, seed)
-records_dicts = [r.to_dict() for r in clean_records]
-assessments, label_indices, scored_records = run_engine(
-    [tuple(sorted(d.items())) for d in records_dicts],
-    anomaly_type, seed,
+st.sidebar.markdown(
+    "**TAIS v2.0** | 25MCA0022\n\n"
+    "Aryan Bhagat | VIT Vellore\n\n"
+    "Guide: Dr. Sathiyamoorthy E"
 )
-df = assessments_to_df(assessments)
-
-# -- Header --
-st.markdown("# TAIS - Telemetry Assessment & Integrity System")
-st.markdown(f"**Scenario:** `{scenario}` | **Anomaly:** `{anomaly_type}` | "
-            f"**Records:** `{len(assessments)}` | **Duration:** `{duration} min`")
-
-# -- Metric cards --
-col1, col2, col3, col4, col5 = st.columns(5)
-
-mean_score = df["Trust Score"].mean()
-min_score = df["Trust Score"].min()
-normal_count = len(df[df["Action"] == "Normal"])
-flagged_count = len(df[df["Action"] == "Flagged for review"])
-escalate_count = len(df[df["Action"] == "Escalate"])
-
-with col1:
-    color = "#48bb78" if mean_score > 80 else "#ed8936" if mean_score > 50 else "#fc8181"
-    st.metric("Mean Trust Score", f"{mean_score:.1f}", delta=None)
-
-with col2:
-    st.metric("Min Score", f"{min_score:.1f}")
-
-with col3:
-    st.metric("Normal", f"{normal_count}", delta=None)
-
-with col4:
-    st.metric("Flagged", f"{flagged_count}",
-              delta=f"{flagged_count}" if flagged_count > 0 else None,
-              delta_color="inverse")
-
-with col5:
-    st.metric("Escalate", f"{escalate_count}",
-              delta=f"{escalate_count}" if escalate_count > 0 else None,
-              delta_color="inverse")
 
 
-# -- Trust Score Trend Chart --
-st.markdown("---")
-st.markdown("## Trust Score Timeline")
+# ==================================================================
+# Load & process data
+# ==================================================================
 
-fig = go.Figure()
+records = load_trip_data(selected_trip)
+records_dicts = [tuple(sorted(r.to_dict().items())) for r in records]
+records_list = [r.to_dict() for r in records]
+records_hash = hash(tuple(records_dicts))
 
-# Action zone bands
-fig.add_hrect(y0=70, y1=100, fillcolor="rgba(72,187,120,0.1)",
-              line_width=0, annotation_text="Normal Zone",
-              annotation_position="top right")
-fig.add_hrect(y0=40, y1=70, fillcolor="rgba(237,137,54,0.15)",
-              line_width=0, annotation_text="Flagged Zone",
-              annotation_position="top right")
-fig.add_hrect(y0=0, y1=40, fillcolor="rgba(252,129,129,0.15)",
-              line_width=0, annotation_text="Escalate Zone",
-              annotation_position="top right")
+assessments, summary, label_indices, scored_records = score_records(
+    records_hash, records_list, inject_anomaly, seed
+)
+df = make_df(assessments, scored_records, label_indices)
 
-# Color-coded scatter
-colors = []
-for _, row in df.iterrows():
-    if row["Action"] == "Escalate":
-        colors.append("#fc8181")
-    elif row["Action"] == "Flagged for review":
-        colors.append("#ed8936")
+
+# ==================================================================
+# Header
+# ==================================================================
+
+st.markdown(f"# {trip_info['icon']} {trip_info['label']}")
+
+if inject_anomaly != "none":
+    st.warning(
+        f"**Anomaly Injected:** `{inject_anomaly}` -- "
+        f"The engine is analyzing data WITH a simulated attack to test detection."
+    )
+
+# Trip metadata
+duration_s = (records[-1].timestamp - records[0].timestamp).total_seconds()
+col_info1, col_info2, col_info3, col_info4 = st.columns(4)
+with col_info1:
+    st.caption("RECORDS")
+    st.markdown(f"**{len(records):,}** data points")
+with col_info2:
+    st.caption("DURATION")
+    if duration_s < 3600:
+        st.markdown(f"**{duration_s/60:.0f}** minutes")
     else:
-        colors.append("#48bb78")
+        st.markdown(f"**{duration_s/3600:.1f}** hours")
+with col_info3:
+    st.caption("DISTANCE")
+    st.markdown(f"**{records[-1].mileage:.1f}** km")
+with col_info4:
+    st.caption("MAX SPEED")
+    st.markdown(f"**{max(r.speed for r in records):.0f}** km/h")
 
-fig.add_trace(go.Scatter(
-    x=df["Timestamp"],
-    y=df["Trust Score"],
+
+# ==================================================================
+# Trust Score Overview
+# ==================================================================
+
+st.markdown("---")
+st.markdown('<div class="section-header">Trust Score Overview</div>', unsafe_allow_html=True)
+
+# Metric cards
+m1, m2, m3, m4, m5 = st.columns(5)
+with m1:
+    st.metric("Average Score", f"{summary['mean_score']:.1f}/100")
+with m2:
+    st.metric("Lowest Score", f"{summary['min_score']:.1f}/100")
+with m3:
+    delta_n = None if summary['normal_count'] == summary['count'] else f"{summary['normal_count']}/{summary['count']}"
+    st.metric("Normal", f"{summary['normal_count']}")
+with m4:
+    st.metric("Flagged", f"{summary['flagged_count']}",
+              delta=f"-{summary['flagged_count']}" if summary['flagged_count'] > 0 else None,
+              delta_color="inverse")
+with m5:
+    st.metric("Escalated", f"{summary['escalate_count']}",
+              delta=f"-{summary['escalate_count']}" if summary['escalate_count'] > 0 else None,
+              delta_color="inverse")
+
+# Quick verdict
+if summary['escalate_count'] > 0:
+    st.error("**ALERT:** Some records scored critically low and need investigation!")
+elif summary['flagged_count'] > 0:
+    st.warning(f"**{summary['flagged_count']} records** were flagged for review. "
+               "This could indicate GPS noise or a genuine anomaly.")
+else:
+    st.success("**All records passed** -- no anomalies detected in this trip.")
+
+
+# ==================================================================
+# Trust Score Timeline
+# ==================================================================
+
+st.markdown("---")
+st.markdown('<div class="section-header">Trust Score Over Time</div>', unsafe_allow_html=True)
+st.caption(
+    "Each dot is one GPS reading. Green = Normal, Orange = Flagged, Red = Escalated. "
+    "The colored bands show the score zones."
+)
+
+fig_timeline = go.Figure()
+
+# Zone bands
+fig_timeline.add_hrect(y0=70, y1=100, fillcolor="rgba(34,197,94,0.08)",
+                        line_width=0, annotation_text="NORMAL",
+                        annotation_position="top left",
+                        annotation=dict(font_color="#4ade80", font_size=11))
+fig_timeline.add_hrect(y0=40, y1=70, fillcolor="rgba(245,158,11,0.08)",
+                        line_width=0, annotation_text="FLAGGED",
+                        annotation_position="top left",
+                        annotation=dict(font_color="#fbbf24", font_size=11))
+fig_timeline.add_hrect(y0=0, y1=40, fillcolor="rgba(239,68,68,0.08)",
+                        line_width=0, annotation_text="ESCALATE",
+                        annotation_position="top left",
+                        annotation=dict(font_color="#f87171", font_size=11))
+
+# Color map for dots
+color_map = {"Normal": "#22c55e", "Flagged for review": "#f59e0b", "Escalate": "#ef4444"}
+dot_colors = [color_map.get(a, "#22c55e") for a in df["Action"]]
+
+fig_timeline.add_trace(go.Scatter(
+    x=df["Time"], y=df["Trust Score"],
     mode="lines+markers",
-    marker=dict(color=colors, size=6),
-    line=dict(color="#63b3ed", width=2),
+    line=dict(color="#60a5fa", width=1.5),
+    marker=dict(color=dot_colors, size=5),
     hovertemplate=(
-        "Time: %{x}<br>"
-        "Trust Score: %{y:.1f}<br>"
+        "<b>Time:</b> %{x|%H:%M:%S}<br>"
+        "<b>Trust Score:</b> %{y:.1f}/100<br>"
         "<extra></extra>"
     ),
     name="Trust Score",
 ))
 
-# Highlight anomaly injection window
+# Mark injected anomalies
 if label_indices:
-    anom_df = df[df["Index"].isin(label_indices)]
-    fig.add_trace(go.Scatter(
-        x=anom_df["Timestamp"],
-        y=anom_df["Trust Score"],
+    anom_df = df[df["Is Anomaly"]]
+    fig_timeline.add_trace(go.Scatter(
+        x=anom_df["Time"], y=anom_df["Trust Score"],
         mode="markers",
-        marker=dict(color="red", size=12, symbol="x",
+        marker=dict(color="#ef4444", size=14, symbol="x",
                     line=dict(width=2, color="white")),
         name="Injected Anomaly",
-        hovertemplate=(
-            "ANOMALY INJECTED<br>"
-            "Time: %{x}<br>"
-            "Trust Score: %{y:.1f}<br>"
-            "<extra></extra>"
-        ),
+        hovertemplate="<b>ANOMALY INJECTED HERE</b><br>Score: %{y:.1f}<extra></extra>",
     ))
 
-fig.update_layout(
+fig_timeline.update_layout(
     template="plotly_dark",
-    height=400,
-    margin=dict(l=40, r=40, t=30, b=40),
+    height=380,
+    margin=dict(l=50, r=30, t=20, b=50),
     xaxis_title="Time",
-    yaxis_title="Trust Score (0-100)",
-    yaxis=dict(range=[-5, 105]),
-    legend=dict(orientation="h", yanchor="bottom", y=1.02),
+    yaxis_title="Trust Score",
+    yaxis=dict(range=[-2, 105]),
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0.5, xanchor="center"),
     plot_bgcolor="rgba(0,0,0,0)",
     paper_bgcolor="rgba(0,0,0,0)",
 )
 
-st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(fig_timeline, use_container_width=True)
 
 
-# -- Sub-scores chart --
+# ==================================================================
+# Two-column: Sub-scores + GPS Map
+# ==================================================================
+
+st.markdown("---")
 col_left, col_right = st.columns([3, 2])
 
 with col_left:
-    st.markdown("## Sub-Score Breakdown")
+    st.markdown('<div class="section-header">What the Engine Checks (4 Dimensions)</div>',
+                unsafe_allow_html=True)
+    st.caption(
+        "The trust score is built from 4 independent checks. "
+        "A drop in any dimension explains WHY a record was flagged."
+    )
 
     fig_sub = go.Figure()
-    for dim, color in [("Motion", "#63b3ed"), ("Trajectory", "#68d391"),
-                        ("Signal", "#fbd38d"), ("Temporal", "#fc8181")]:
+    dims = [
+        ("Motion Score", "#3b82f6", "Speed & acceleration checks (R1, R2)"),
+        ("Trajectory Score", "#22c55e", "Position vs speed & heading checks (R3, R4)"),
+        ("Signal Score", "#f59e0b", "GPS quality & satellite count (R5, R6)"),
+        ("Temporal Score", "#ef4444", "Timestamp consistency (R7)"),
+    ]
+    for col_name, color, desc in dims:
         fig_sub.add_trace(go.Scatter(
-            x=df["Timestamp"], y=df[dim],
-            mode="lines", name=dim,
+            x=df["Time"], y=df[col_name],
+            mode="lines", name=col_name.replace(" Score", ""),
             line=dict(color=color, width=1.5),
+            hovertemplate=f"<b>{col_name}:</b> " + "%{y:.1f}<extra></extra>",
         ))
 
     fig_sub.update_layout(
         template="plotly_dark",
         height=300,
-        margin=dict(l=40, r=40, t=30, b=40),
-        yaxis=dict(range=[-5, 105], title="Sub-Score"),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02),
+        margin=dict(l=50, r=30, t=10, b=40),
+        yaxis=dict(range=[-2, 105], title="Score"),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0.5, xanchor="center"),
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
     )
     st.plotly_chart(fig_sub, use_container_width=True)
 
 with col_right:
-    st.markdown("## Action Distribution")
-    action_counts = df["Action"].value_counts()
-    fig_pie = go.Figure(data=[go.Pie(
-        labels=action_counts.index,
-        values=action_counts.values,
-        marker=dict(colors=["#48bb78", "#ed8936", "#fc8181"]),
-        hole=0.5,
-        textinfo="label+percent",
-    )])
-    fig_pie.update_layout(
-        template="plotly_dark",
-        height=300,
-        margin=dict(l=20, r=20, t=30, b=20),
-        plot_bgcolor="rgba(0,0,0,0)",
-        paper_bgcolor="rgba(0,0,0,0)",
-        showlegend=False,
-    )
-    st.plotly_chart(fig_pie, use_container_width=True)
+    st.markdown('<div class="section-header">Trip Route on Map</div>',
+                unsafe_allow_html=True)
+    st.caption("GPS points plotted on map. Color = trust score.")
+
+    map_df = df[["Latitude", "Longitude", "Trust Score", "Speed (km/h)"]].copy()
+    map_df = map_df.rename(columns={"Latitude": "lat", "Longitude": "lon"})
+    # Filter out obviously wrong points (network jumps)
+    map_df = map_df[(map_df["lat"] > 12.5) & (map_df["lat"] < 13.5)]
+
+    st.map(map_df, size=8)
 
 
-# -- Alerts table --
+# ==================================================================
+# Speed & Satellite Profile
+# ==================================================================
+
 st.markdown("---")
-st.markdown("## Flagged Records & Alerts")
-
-flagged_df = df[df["Flag Count"] > 0].copy()
-if len(flagged_df) > 0:
-    flagged_df = flagged_df[["Index", "Timestamp", "Trust Score", "Action",
-                              "Confidence", "Reasons"]].reset_index(drop=True)
-    st.dataframe(
-        flagged_df.style.apply(
-            lambda row: [
-                'background-color: #742a2a' if row["Action"] == "Escalate"
-                else 'background-color: #744210' if row["Action"] == "Flagged for review"
-                else '' for _ in row
-            ], axis=1
-        ),
-        use_container_width=True,
-        height=min(400, len(flagged_df) * 35 + 38),
-    )
-else:
-    st.success("No flags triggered -- all records within normal parameters.")
-
-# -- Record detail explorer --
-st.markdown("---")
-st.markdown("## Record Detail Explorer")
-
-selected_idx = st.slider(
-    "Select Record Index",
-    min_value=0, max_value=len(assessments) - 1, value=0,
+st.markdown('<div class="section-header">Speed & Signal Quality Profile</div>',
+            unsafe_allow_html=True)
+st.caption(
+    "Top: Vehicle speed over time. Bottom: Number of satellites tracking your position. "
+    "Below 4 satellites = unreliable fix."
 )
 
-a = assessments[selected_idx]
-r = scored_records[selected_idx]
+fig_speed = go.Figure()
 
-detail_col1, detail_col2, detail_col3 = st.columns(3)
+# Speed trace
+fig_speed.add_trace(go.Scatter(
+    x=df["Time"], y=df["Speed (km/h)"],
+    mode="lines", name="Speed",
+    line=dict(color="#8b5cf6", width=1.5),
+    hovertemplate="<b>Speed:</b> %{y:.1f} km/h<extra></extra>",
+))
 
-with detail_col1:
-    st.markdown("### Telemetry Data")
-    st.json({
-        "device_id": r.device_id,
-        "timestamp": r.timestamp.isoformat(),
-        "latitude": r.latitude,
-        "longitude": r.longitude,
-        "speed_kmh": r.speed,
-        "heading_deg": r.heading,
-        "hdop": r.hdop,
-        "satellite_count": r.satellite_count,
-        "mileage_km": r.mileage,
-    })
+fig_speed.update_layout(
+    template="plotly_dark",
+    height=200,
+    margin=dict(l=50, r=30, t=10, b=30),
+    yaxis_title="Speed (km/h)",
+    showlegend=False,
+    plot_bgcolor="rgba(0,0,0,0)",
+    paper_bgcolor="rgba(0,0,0,0)",
+)
+st.plotly_chart(fig_speed, use_container_width=True)
 
-with detail_col2:
-    st.markdown("### Trust Assessment")
-    score_color = "green" if a.trust_score > 70 else "orange" if a.trust_score > 40 else "red"
-    st.markdown(f"**Trust Score:** :{score_color}[**{a.trust_score}**]")
-    st.markdown(f"**Action:** {a.action.value}")
-    st.markdown(f"**Confidence:** {a.confidence.value}")
+fig_sats = go.Figure()
+fig_sats.add_trace(go.Bar(
+    x=df["Time"], y=df["Satellites"],
+    marker_color=["#22c55e" if s >= 4 else "#ef4444" for s in df["Satellites"]],
+    hovertemplate="<b>Satellites:</b> %{y}<extra></extra>",
+))
+fig_sats.add_hline(y=4, line_dash="dash", line_color="#f59e0b",
+                    annotation_text="Minimum for 3D fix",
+                    annotation_position="top left",
+                    annotation_font_color="#fbbf24")
+fig_sats.update_layout(
+    template="plotly_dark",
+    height=180,
+    margin=dict(l=50, r=30, t=10, b=30),
+    yaxis_title="Satellites",
+    showlegend=False,
+    plot_bgcolor="rgba(0,0,0,0)",
+    paper_bgcolor="rgba(0,0,0,0)",
+)
+st.plotly_chart(fig_sats, use_container_width=True)
 
-    st.markdown("**Sub-Scores:**")
-    for dim, score in a.sub_scores.items():
-        bar_color = "green" if score > 80 else "orange" if score > 50 else "red"
-        st.progress(score / 100, text=f"{dim.title()}: {score}")
 
-with detail_col3:
-    st.markdown("### Explanations")
+# ==================================================================
+# Flagged Records Table
+# ==================================================================
+
+st.markdown("---")
+st.markdown('<div class="section-header">Flagged Records Detail</div>',
+            unsafe_allow_html=True)
+
+flagged_df = df[df["Issue Count"] > 0][
+    ["Index", "Time", "Trust Score", "Action", "Speed (km/h)",
+     "Satellites", "HDOP", "Source", "Issues"]
+].copy()
+
+if len(flagged_df) > 0:
+    st.caption(
+        f"**{len(flagged_df)} records** had issues detected. "
+        "Click any row to see the full explanation below."
+    )
+
+    # Color-code rows
+    def highlight_action(row):
+        if row["Action"] == "Escalate":
+            return ["background-color: rgba(239,68,68,0.2)"] * len(row)
+        elif row["Action"] == "Flagged for review":
+            return ["background-color: rgba(245,158,11,0.15)"] * len(row)
+        return [""] * len(row)
+
+    st.dataframe(
+        flagged_df.style.apply(highlight_action, axis=1),
+        use_container_width=True,
+        height=min(400, len(flagged_df) * 35 + 40),
+    )
+else:
+    st.success("No issues detected -- all records passed all 7 checks!")
+
+
+# ==================================================================
+# Record Inspector
+# ==================================================================
+
+st.markdown("---")
+st.markdown('<div class="section-header">Record Inspector</div>', unsafe_allow_html=True)
+st.caption("Slide to inspect any individual GPS reading and see exactly what the engine found.")
+
+idx = st.slider("Select record #", 0, len(assessments) - 1, 0)
+
+a = assessments[idx]
+r = scored_records[idx]
+
+c1, c2, c3 = st.columns([1, 1, 1])
+
+with c1:
+    st.markdown("#### GPS Data")
+    st.markdown(f"""
+| Field | Value |
+|-------|-------|
+| **Time** | {r.timestamp.strftime('%H:%M:%S')} |
+| **Location** | {r.latitude:.6f}, {r.longitude:.6f} |
+| **Speed** | {r.speed:.1f} km/h |
+| **Heading** | {r.heading:.0f} deg |
+| **Satellites** | {r.satellite_count} |
+| **HDOP** | {r.hdop} |
+| **Source** | {'GPS' if r.satellite_count > 0 else 'Network'} |
+""")
+
+with c2:
+    st.markdown("#### Trust Assessment")
+
+    # Score with color
+    if a.trust_score > 70:
+        score_class = "score-high"
+    elif a.trust_score > 40:
+        score_class = "score-mid"
+    else:
+        score_class = "score-low"
+
+    st.markdown(
+        f'<span class="score-badge {score_class}">{a.trust_score}/100</span> '
+        f'&nbsp; **{a.action.value}** &nbsp; ({a.confidence.value} confidence)',
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("")
+    for dim_name, dim_key in [("Motion", "motion"), ("Trajectory", "trajectory"),
+                                ("Signal", "signal"), ("Temporal", "temporal")]:
+        score = a.sub_scores.get(dim_key, 100)
+        color = "green" if score > 80 else "orange" if score > 50 else "red"
+        st.progress(score / 100, text=f"{dim_name}: {score:.0f}/100")
+
+with c3:
+    st.markdown("#### What Was Found")
     if a.reasons:
         for reason in a.reasons:
             rule_id = reason.split(":")[0].strip()
+            rule_name, rule_explain = RULE_EXPLANATIONS.get(rule_id, ("Unknown", ""))
+            detail = reason.split(":", 1)[1].strip() if ":" in reason else reason
             st.markdown(f"""
-<div class="reason-box">
-    <strong>{rule_id}</strong>: {reason.split(':', 1)[1].strip() if ':' in reason else reason}
+<div class="rule-card">
+    <span class="rule-id">{rule_id}: {rule_name}</span>
+    <div class="rule-desc">{detail}</div>
 </div>
 """, unsafe_allow_html=True)
     else:
-        st.markdown("*No anomalies detected for this record.*")
+        st.markdown("""
+<div class="info-card info-card-success">
+    <b>All clear!</b> This record passed all 7 checks with no issues.
+</div>
+""", unsafe_allow_html=True)
 
-    is_anomaly = selected_idx in label_indices
-    if is_anomaly:
-        st.error(f"This record has an INJECTED ANOMALY ({anomaly_type})")
+    if idx in label_indices:
+        st.markdown(f"""
+<div class="info-card info-card-danger">
+    <b>INJECTED ANOMALY</b><br>
+    A <code>{inject_anomaly}</code> anomaly was injected at this record for testing.
+</div>
+""", unsafe_allow_html=True)
 
 
-# -- Summary stats --
+# ==================================================================
+# How the Scoring Works (Educational)
+# ==================================================================
+
 st.markdown("---")
-st.markdown("## Sequence Summary")
+with st.expander("How does the Trust Scoring Engine work?", expanded=False):
+    st.markdown("""
+### How TAIS Scores Each GPS Reading
 
-engine = TrustScoringEngine()
-summary = engine.sequence_summary(assessments)
+Every GPS reading is checked against **7 rules** grouped into **4 dimensions**.
+Each dimension starts at **100 points** and loses points for violations.
+The final trust score is a weighted average:
 
-sum_col1, sum_col2 = st.columns(2)
-with sum_col1:
-    st.json({
-        "total_records": summary["count"],
-        "mean_score": summary["mean_score"],
-        "min_score": summary["min_score"],
-        "max_score": summary["max_score"],
-        "normal": summary["normal_count"],
-        "flagged": summary["flagged_count"],
-        "escalate": summary["escalate_count"],
-    })
+| Dimension | Weight | Rules | What It Checks |
+|-----------|--------|-------|----------------|
+| **Motion** | 35% | R1, R2 | Is the speed/acceleration physically possible? |
+| **Trajectory** | 30% | R3, R4 | Does the position match the speed and direction? |
+| **Signal** | 15% | R5, R6 | Is the GPS signal reliable (HDOP, satellites)? |
+| **Temporal** | 20% | R7 | Are timestamps consistent and sequential? |
 
-with sum_col2:
-    if summary.get("rule_breakdown"):
-        st.markdown("### Rule Trigger Breakdown")
-        rule_df = pd.DataFrame([
-            {"Rule": k, "Triggers": v}
-            for k, v in sorted(summary["rule_breakdown"].items())
-        ])
-        st.bar_chart(rule_df.set_index("Rule"))
-    else:
-        st.info("No rules were triggered in this sequence.")
+### Action Thresholds
+
+| Score | Action | Meaning |
+|-------|--------|---------|
+| **> 70** | Normal | Data looks trustworthy |
+| **40 - 70** | Flagged | Something looks off, needs human review |
+| **< 40** | Escalate | Strong evidence of tampering or failure |
+
+### Why This Matters
+
+Fleet tracking devices can be tampered with to hide theft, misuse, or non-compliance.
+TAIS catches these by looking for **physically impossible patterns** in the GPS data,
+like a vehicle teleporting, going 500 km/h, or reporting movement while the GPS
+shows no position change.
+""")
