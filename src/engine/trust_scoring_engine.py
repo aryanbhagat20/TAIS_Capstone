@@ -77,11 +77,12 @@ class ScoringConfig:
     # ── R3: Position-speed mismatch ──
     speed_position_ratio_warn: float = 2.0    # Reported speed / actual > 2x
     speed_position_ratio_critical: float = 5.0  # > 5x = clearly anomalous
-    min_distance_for_check_m: float = 5.0     # Skip check below 5m (GPS noise)
+    min_distance_for_check_m: float = 3.0     # Skip check below 3m (GPS noise)
+    teleport_distance_m: float = 5000.0       # > 5km in one step = teleport
 
     # ── R4: Heading-bearing mismatch ──
-    heading_bearing_warn_deg: float = 45.0    # > 45° deviation
-    heading_bearing_critical_deg: float = 90.0  # > 90° = going backwards?
+    heading_bearing_warn_deg: float = 30.0    # > 30° deviation
+    heading_bearing_critical_deg: float = 60.0  # > 60° = impossible turn
     min_speed_for_heading_check_kmh: float = 5.0  # Skip when near-stationary
 
     # ── R5: HDOP degradation ──
@@ -100,8 +101,8 @@ class ScoringConfig:
     # ── Penalty weights per rule (max penalty each rule can contribute) ──
     penalty_r1_speed: float = 25.0
     penalty_r2_accel: float = 20.0
-    penalty_r3_pos_speed: float = 25.0
-    penalty_r4_heading: float = 15.0
+    penalty_r3_pos_speed: float = 35.0
+    penalty_r4_heading: float = 30.0
     penalty_r5_hdop: float = 10.0
     penalty_r6_satellite: float = 10.0
     penalty_r7_temporal: float = 15.0
@@ -282,7 +283,12 @@ class TrustScoringEngine:
 
     def _rule_r2_acceleration(self, record: TelemetryRecord,
                               prev: TelemetryRecord | None) -> RuleResult:
-        """R2: Impossible acceleration between consecutive records."""
+        """R2: Impossible acceleration between consecutive records.
+
+        Checks BOTH reported speed change AND derived speed from position
+        displacement. This catches position jumps (teleportation) even when
+        the reported speed field is unchanged.
+        """
         c = self.config
 
         if prev is None:
@@ -300,21 +306,44 @@ class TrustScoringEngine:
                 severity="none", dimension="motion", reason="",
             )
 
+        # Check 1: Reported speed change
         accel = derive_acceleration(prev.speed, record.speed, dt)
         abs_accel = abs(accel)
 
-        if abs_accel > c.accel_critical_ms2:
-            action_word = "deceleration" if accel < 0 else "acceleration"
-            return RuleResult(
-                rule_id="R2", rule_name="Acceleration",
-                triggered=True, penalty=c.penalty_r2_accel,
-                severity="critical", dimension="motion",
-                reason=(f"R2: Impossible {action_word} "
-                        f"{abs_accel:.2f} m/s² "
-                        f"(limit: {c.accel_critical_ms2} m/s²)"),
-            )
-        elif abs_accel > c.accel_warn_ms2:
-            ratio = ((abs_accel - c.accel_warn_ms2) /
+        # Check 2: Derived speed from position change (catches teleportation)
+        actual_dist_m = haversine_distance(
+            prev.latitude, prev.longitude,
+            record.latitude, record.longitude,
+        )
+        derived_speed_kmh = (actual_dist_m / dt) * 3.6 if dt > 0 else 0
+        derived_accel = abs(derive_acceleration(
+            prev.speed, derived_speed_kmh, dt
+        ))
+
+        worst_accel = max(abs_accel, derived_accel)
+
+        if worst_accel > c.accel_critical_ms2:
+            if derived_accel > abs_accel:
+                return RuleResult(
+                    rule_id="R2", rule_name="Acceleration",
+                    triggered=True, penalty=c.penalty_r2_accel,
+                    severity="critical", dimension="motion",
+                    reason=(f"R2: Impossible displacement — derived speed "
+                            f"{derived_speed_kmh:.0f} km/h from position "
+                            f"change of {actual_dist_m:.0f}m in {dt:.0f}s"),
+                )
+            else:
+                action_word = "deceleration" if accel < 0 else "acceleration"
+                return RuleResult(
+                    rule_id="R2", rule_name="Acceleration",
+                    triggered=True, penalty=c.penalty_r2_accel,
+                    severity="critical", dimension="motion",
+                    reason=(f"R2: Impossible {action_word} "
+                            f"{abs_accel:.2f} m/s² "
+                            f"(limit: {c.accel_critical_ms2} m/s²)"),
+                )
+        elif worst_accel > c.accel_warn_ms2:
+            ratio = ((worst_accel - c.accel_warn_ms2) /
                      (c.accel_critical_ms2 - c.accel_warn_ms2))
             penalty = c.penalty_r2_accel * 0.5 * ratio
             action_word = "deceleration" if accel < 0 else "acceleration"
@@ -323,7 +352,7 @@ class TrustScoringEngine:
                 triggered=True, penalty=penalty,
                 severity="warn", dimension="motion",
                 reason=(f"R2: Extreme {action_word} "
-                        f"{abs_accel:.2f} m/s² "
+                        f"{worst_accel:.2f} m/s² "
                         f"(warn: {c.accel_warn_ms2} m/s²)"),
             )
 
@@ -365,6 +394,16 @@ class TrustScoringEngine:
             record.latitude, record.longitude,
         )
 
+        # Teleportation check — impossible displacement in any single step
+        if actual_dist_m > c.teleport_distance_m:
+            return RuleResult(
+                rule_id="R3", rule_name="Position-Speed Match",
+                triggered=True, penalty=c.penalty_r3_pos_speed,
+                severity="critical", dimension="trajectory",
+                reason=(f"R3: Teleportation detected — position jumped "
+                        f"{actual_dist_m/1000:.1f}km in {dt:.0f}s"),
+            )
+
         # Skip check for very small movements (GPS noise)
         if actual_dist_m < c.min_distance_for_check_m and record.speed < 10:
             return RuleResult(
@@ -388,14 +427,14 @@ class TrustScoringEngine:
                         f"reported speed ≈ 0 km/h (GPS freeze or drift?)"),
             )
 
-        if actual_dist_m < 1.0 and expected_dist_m > 50:
-            # Speed says moving but position didn't change
+        if actual_dist_m < 1.0 and expected_dist_m > 10:
+            # Speed says moving but position didn't change (lowered from 50m to 10m)
             return RuleResult(
                 rule_id="R3", rule_name="Position-Speed Match",
                 triggered=True, penalty=c.penalty_r3_pos_speed,
                 severity="critical", dimension="trajectory",
                 reason=(f"R3: Reported speed implies {expected_dist_m:.0f}m "
-                        f"travel but position unchanged (speed injection?)"),
+                        f"travel but position unchanged (GPS freeze?)"),
             )
 
         # General ratio check
