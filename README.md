@@ -6,16 +6,17 @@
 
 A server-side system that assesses the integrity of AIS-140 vehicle-tracking telemetry,
 computing a Trust Score with an explained confidence level to flag kinematically implausible
-data — ahead of India's shift to GNSS-based satellite tolling. Simulation-first: no physical
-hardware or field data collection required to complete this capstone.
+data — ahead of India's shift to GNSS-based satellite tolling. 
+
+**Evaluated on 47,000+ real-world GPS records** using the Microsoft T-Drive Beijing Taxi Dataset and localized self-collected data.
 
 See the full project proposal for problem statement, architecture, and scope:
 `docs/TAIS_Capstone_Proposal.pdf`.
 
 ## Status
 
-🟠 **Week 6 of 17** — Review-1 submitted (Aug 14). Simulator + Anomaly Injector implementation in progress.
-See `TAIS_Project_Timeline.pdf` for the full week-by-week plan.
+🟢 **100% IMPLEMENTATION COMPLETE** — Ready for Review-2, Guide Review, and Final Submission.
+Pipeline, Dashboard, and Evaluation modules are fully built and tested against real-world data.
 
 ### Milestones
 | Milestone | Target Week | Status |
@@ -24,12 +25,12 @@ See `TAIS_Project_Timeline.pdf` for the full week-by-week plan.
 | Problem statement, methodology, simulator skeleton | Week 2 | ✅ Done |
 | Literature survey (16 papers, APA) | Week 3 | ✅ Done |
 | **Review-1 submitted** | Aug 14 | ✅ Done |
-| Telemetry Simulator (full implementation) | Week 4–5 | 🔄 In Progress |
-| Anomaly Injector (6 types) | Week 5 | 🔄 In Progress |
-| Trust-Scoring Engine | Weeks 6–7 | ⏳ Upcoming |
-| Explanation Layer | Week 7 | ⏳ Upcoming |
-| Dashboard | Week 8 | ⏳ Upcoming |
-| Evaluation & metrics | Weeks 9–10 | ⏳ Upcoming |
+| Telemetry Simulator (full implementation) | Week 4–5 | ✅ Upgraded to Real Data (T-Drive) |
+| Anomaly Injector (6 types) | Week 5 | ✅ Done |
+| Trust-Scoring Engine | Weeks 6–7 | ✅ Done (7 Rules, 4 Dimensions) |
+| Explanation Layer | Week 7 | ✅ Done |
+| Dashboard | Week 8 | ✅ Done (Streamlit v2.0) |
+| Evaluation & metrics | Weeks 9–10 | ✅ Done (Precision, Recall, F1, ROC) |
 
 ## Repo Structure
 
@@ -58,7 +59,10 @@ TAIS/
 │   ├── test_schema.py                   ← Week 1
 │   └── test_simulator_skeleton.py       ← Week 2
 │
-├── data/                                ← Generated telemetry CSVs/JSONs (gitignored)
+├── data/                                ← Telemetry CSVs and Evaluation outputs
+│   ├── raw/                             ← Raw GPS files (own_collection, tdrive)
+│   ├── processed/                       ← Engine outputs with Trust Scores
+│   └── evaluation/                      ← Metrics, ROC curves, and JSON summaries
 │
 └── reviews/                             ← Submitted review deliverables (read-only archive)
     └── review-1/
