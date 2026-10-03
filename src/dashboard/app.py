@@ -141,37 +141,61 @@ st.markdown("""
 # ==================================================================
 
 TRIP_DIR = Path(ROOT) / "data" / "raw" / "own_collection"
+TDRIVE_DIR = Path(ROOT) / "data" / "raw" / "tdrive"
 
 TRIP_INFO = {
+    # Own collected trips
     "trip_01_campus": {
         "label": "Campus Walk (VIT Vellore)",
         "icon": "🏫",
         "description": "Walking around VIT campus - low speed, frequent turns",
+        "source": "own",
     },
     "trip_02_city": {
         "label": "City Drive (Vellore)",
         "icon": "🏙️",
         "description": "Driving through Vellore city - mixed speeds, traffic signals",
+        "source": "own",
     },
     "trip_03_highway": {
         "label": "Highway Drive",
         "icon": "🛣️",
         "description": "Highway driving - sustained high speed, straight roads",
+        "source": "own",
     },
     "trip_05_stationary": {
         "label": "Stationary (Parked)",
         "icon": "🅿️",
         "description": "Phone kept stationary - baseline for GPS drift detection",
+        "source": "own",
     },
 }
+
+# Dynamically add T-Drive taxis
+for txt_file in sorted(TDRIVE_DIR.glob("*.txt")):
+    taxi_id = txt_file.stem
+    key = f"tdrive_{taxi_id}"
+    TRIP_INFO[key] = {
+        "label": f"Beijing Taxi #{taxi_id}",
+        "icon": "🚕",
+        "description": f"T-Drive dataset - Taxi {taxi_id} trajectory in Beijing",
+        "source": "tdrive",
+    }
 
 
 @st.cache_data
 def load_trip_data(trip_name):
-    """Load a trip CSV and return records + assessments."""
-    loader = OwnDataLoader()
-    device_id = f"ARYAN_{trip_name.split('_')[2].upper()}"
-    records = loader.load_trip(str(TRIP_DIR / f"{trip_name}.csv"), device_id=device_id)
+    """Load a trip from either own collection or T-Drive."""
+    info = TRIP_INFO[trip_name]
+    if info["source"] == "own":
+        loader = OwnDataLoader()
+        device_id = f"ARYAN_{trip_name.split('_')[2].upper()}"
+        records = loader.load_trip(str(TRIP_DIR / f"{trip_name}.csv"), device_id=device_id)
+    else:
+        from src.data_loader.tdrive_loader import TDriveLoader
+        loader = TDriveLoader(str(TDRIVE_DIR))
+        taxi_id = int(trip_name.replace("tdrive_", ""))
+        records = loader.load_taxi(taxi_id=taxi_id)
     return records
 
 
@@ -250,27 +274,46 @@ st.sidebar.markdown("# 🛡️ TAIS Dashboard")
 st.sidebar.markdown("*Telemetry Assessment & Integrity System*")
 st.sidebar.markdown("---")
 
-# Find available trips
+# Find available trips from both sources
 available_trips = []
-for name in TRIP_INFO:
-    if (TRIP_DIR / f"{name}.csv").exists():
+for name, info in TRIP_INFO.items():
+    if info["source"] == "own" and (TRIP_DIR / f"{name}.csv").exists():
+        available_trips.append(name)
+    elif info["source"] == "tdrive" and (TDRIVE_DIR / f"{name.replace('tdrive_', '')}.txt").exists():
         available_trips.append(name)
 
 if not available_trips:
-    st.error("No trip data found! Place CSV files in data/raw/own_collection/")
+    st.error("No trip data found!")
     st.stop()
+
+# Data source filter
+st.sidebar.markdown("### Data Source")
+source_filter = st.sidebar.radio(
+    "Show trips from:",
+    ["All", "Own Collection (Vellore)", "T-Drive (Beijing)"],
+    index=0,
+    label_visibility="collapsed",
+)
+
+if source_filter == "Own Collection (Vellore)":
+    filtered_trips = [t for t in available_trips if TRIP_INFO[t]["source"] == "own"]
+elif source_filter == "T-Drive (Beijing)":
+    filtered_trips = [t for t in available_trips if TRIP_INFO[t]["source"] == "tdrive"]
+else:
+    filtered_trips = available_trips
 
 # Trip selector
 st.sidebar.markdown("### Select Trip")
 selected_trip = st.sidebar.selectbox(
     "Choose a trip to analyze",
-    available_trips,
+    filtered_trips,
     format_func=lambda x: f"{TRIP_INFO[x]['icon']} {TRIP_INFO[x]['label']}",
     label_visibility="collapsed",
 )
 
 trip_info = TRIP_INFO[selected_trip]
-st.sidebar.info(f"**{trip_info['label']}**\n\n{trip_info['description']}")
+source_badge = "📱 Self-collected" if trip_info["source"] == "own" else "📊 T-Drive Dataset"
+st.sidebar.info(f"**{trip_info['label']}**\n\n{trip_info['description']}\n\n*Source: {source_badge}*")
 
 # Anomaly injection toggle
 st.sidebar.markdown("---")
